@@ -1,0 +1,66 @@
+import discord
+from discord import app_commands
+from discord.ext import commands
+import os
+from odds import get_odds, detect_arbitrage
+
+TOKEN = os.getenv("DISCORD_TOKEN")
+
+intents = discord.Intents.default()
+bot = commands.Bot(command_prefix="/", intents=intents)
+tree = bot.tree
+
+@bot.event
+async def on_ready():
+    synced = await tree.sync()
+    print(f"Logged in as {bot.user} (ID: {bot.user.id})")
+    print(f"Synced {len(synced)} commands.")
+
+@tree.command(name="bestbetslive", description="Show best odds for upcoming games")
+async def bestbets(interaction: discord.Interaction):
+    await interaction.response.defer()
+    data = get_odds()
+    if isinstance(data, str):
+        await interaction.followup.send(data)
+        return
+
+    msg = "**🎯 Best Odds Today**\n\n"
+    count = 0
+    for game in data:
+        if "teams" not in game or "bookmakers" not in game or not game["bookmakers"]:
+            continue  # skip bad data
+        teams = game["teams"]
+        msg += f"**{teams[0]} vs {teams[1]}**\n"
+        for book in game["bookmakers"]:
+            line = book["markets"][0]["outcomes"]
+            odds_str = " / ".join([f"{o['name']} @ {o['price']}" for o in line])
+            msg += f"• {book['title']}: {odds_str}\n"
+        msg += "\n"
+        count += 1
+        if count >= 3:
+            break
+
+    await interaction.followup.send(msg or "No valid odds found.")
+
+@tree.command(name="arbs", description="Detect arbitrage opportunities")
+async def arbs(interaction: discord.Interaction):
+    await interaction.response.defer()
+    data = get_odds()
+    if isinstance(data, str):
+        await interaction.followup.send(data)
+        return
+
+    arbs = detect_arbitrage(data)
+    if not arbs:
+        await interaction.followup.send("😕 No arbitrage opportunities found.")
+        return
+
+    msg = "**💰 Arbitrage Opportunities**\n\n"
+    for arb in arbs[:2]:
+        msg += f"**{arb['teams'][0]} vs {arb['teams'][1]}**\n"
+        for name, out in arb["outcomes"].items():
+            msg += f"{name} @ {out['price']} ({out['book']})\n"
+        msg += f"→ Profit Margin: **{arb['profit']}%**\n\n"
+    await interaction.followup.send(msg)
+
+bot.run(TOKEN)
